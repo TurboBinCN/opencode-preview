@@ -105,12 +105,13 @@ export const server: Plugin = async ({ project, client, $, serverUrl }) => {
       preview: tool({
         description: PREVIEW_TOOL_DESCRIPTION,
         args: {
-          file: tool.schema.string().describe("Path to a previewable file (.md, .drawio, .png, code files); relative, absolute, and ~ paths are supported"),
+          file: tool.schema.string().optional().describe("Path to a previewable file (.md, .drawio, .png, code files); relative, absolute, and ~ paths are supported. Alias of filePath."),
+          filePath: tool.schema.string().optional().describe("Alias of file: path to a previewable file (.md, .drawio, .png, code files); relative, absolute, and ~ paths are supported"),
           worktree: tool.schema.string().optional().describe("Git worktree name to preview from (resolves via .git/worktrees/)"),
         },
         async execute(args, context) {
           const { baseUrl } = await ready
-          const file = args.file.trim()
+          const file = (args.file ?? args.filePath ?? "").trim()
           if (args.worktree) {
             const url = buildPreviewUrl(baseUrl, projectId, file, args.worktree)
             await openInBrowser($, url)
