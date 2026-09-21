@@ -1,10 +1,17 @@
 import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
+import { spawn } from "node:child_process"
 
-import { type Plugin, type PluginModule, tool } from "@opencode-ai/plugin"
+import { Plugin } from "@opencode/plugin"
 
-import { buildExternalPreviewUrl, isPreviewable, registerExternalPreviewFile, startServer } from "./server"
+import {
+  buildExternalPreviewUrl,
+  isPreviewable,
+  registerExternalPreviewFile,
+  registerServerProject,
+  startServer,
+} from "./server"
 
 const DEFAULT_PORT = Number(process.env.PREVIEW_PORT ?? "17890")
 const DEFAULT_HOST = process.env.PREVIEW_HOST ?? "localhost"
@@ -26,7 +33,7 @@ export function buildPreviewUrl(baseUrl: string, projectId: string, file: string
   return url
 }
 
-function expandHomePath(filePath: string): string {
+export function expandHomePath(filePath: string): string {
   if (filePath === "~") return homedir()
   if (filePath.startsWith(`~${path.sep}`)) return path.join(homedir(), filePath.slice(2))
   return filePath
@@ -45,137 +52,142 @@ export function toProjectRelativePath(absolutePath: string, worktree: string): s
   return relative.split(path.sep).join("/")
 }
 
-export function addPreviewSystemPrompt(output: { system: string[] }): void {
-  output.system.push(PREVIEW_SYSTEM_PROMPT)
+/**
+ * Resolve the file used by the preview tool. Accepts both `file` (primary)
+ * and `filePath` (alias — the model frequently passes filePath). Returns "".
+ */
+export function resolvePreviewInput(file?: string, filePath?: string): string {
+  return (file ?? filePath ?? "").trim()
 }
 
-export function applyPreviewToolDefinition(input: { toolID: string }, output: { description: string }): void {
-  if (input.toolID === "preview") {
-    output.description = PREVIEW_TOOL_DESCRIPTION
-  }
-}
-
-async function openInBrowser($: PluginContext["$"] | undefined, url: string): Promise<void> {
-  if (!$) {
-    return
-  }
-
+/**
+ * V2 has no `$` helper (V1 bun-shell). Open the URL with a detached native
+ * process so the plugin does not block on the browser.
+ */
+export function openInBrowser(url: string): void {
   const platform = process.platform
   try {
     if (platform === "darwin") {
-      await $`open ${url}`.quiet()
+      spawn("open", [url], { stdio: "ignore", detached: true }).unref()
       return
     }
     if (platform === "win32") {
-      await $`cmd /c start ${url}`.quiet()
+      // `cmd /c start "" <url>` — empty title arg avoids the first quoted
+      // token being swallowed as the window title.
+      spawn("cmd", ["/c", "start", "", url], { stdio: "ignore", detached: true }).unref()
       return
     }
-    await $`xdg-open ${url}`.quiet()
+    spawn("xdg-open", [url], { stdio: "ignore", detached: true }).unref()
   } catch (error) {
     console.debug(`[opencode-preview] Failed to open browser: ${error}`)
   }
 }
 
-type PluginContext = Parameters<Plugin>[0]
+interface PreviewInput {
+  file?: string
+  filePath?: string
+  worktree?: string
+}
 
-export const server: Plugin = async ({ project, client, $, serverUrl }) => {
-  const projectId = project.id
+export default Plugin.define({
+  id: "opencode-preview",
+  async setup(ctx) {
+    const project = ctx.location.project
+    const projectId = project.id
+    const projectDir = ctx.location.directory
 
-  // Defer server startup to background so plugin init returns immediately
-  // and does not block opencode startup. The ready promise is awaited lazily
-  // when the preview tool is first invoked.
-  const ready = (async () => {
-    const port = await startServer(DEFAULT_PORT, serverUrl.toString().replace(/\/$/, ""))
-    const baseUrl = resolveBaseUrl(DEFAULT_HOST, port)
+    // Register this project with the singleton preview server so it can
+    // resolve `?project=<id>` URLs. V2 does not hand plugins the opencode
+    // server URL (V1 `serverUrl`), and the server no longer discovers
+    // projects over HTTP — each plugin instance is location-scoped and
+    // knows its own project. Projects seen by the server = projects with a
+    // live plugin instance (same semantics the V1 `/project` endpoint had:
+    // only projects with an open session were listed).
+    registerServerProject(projectId, projectDir)
 
-    client.app.log({
-      body: {
-        service: "opencode-preview",
-        level: "info",
-        message: `Preview server started at ${baseUrl}/browse?project=${projectId}`,
-        extra: { projectId, port },
-      },
-    })
+    // Defer server startup to background so plugin init returns immediately
+    // and does not block opencode startup. The ready promise is awaited
+    // lazily when the preview tool is first invoked.
+    const ready = (async () => {
+      const port = await startServer(DEFAULT_PORT)
+      const baseUrl = resolveBaseUrl(DEFAULT_HOST, port)
+      console.log(`[opencode-preview] Preview server started at ${baseUrl}/browse?project=${projectId}`)
+      return { port, baseUrl }
+    })()
 
-    return { port, baseUrl }
-  })()
-
-  return {
-    tool: {
-      preview: tool({
+    await ctx.tool.transform((editor) => {
+      editor.add({
+        name: "preview",
         description: PREVIEW_TOOL_DESCRIPTION,
-        args: {
-          file: tool.schema.string().optional().describe("Path to a previewable file (.md, .drawio, .png, code files); relative, absolute, and ~ paths are supported. Alias of filePath."),
-          filePath: tool.schema.string().optional().describe("Alias of file: path to a previewable file (.md, .drawio, .png, code files); relative, absolute, and ~ paths are supported"),
-          worktree: tool.schema.string().optional().describe("Git worktree name to preview from (resolves via .git/worktrees/)"),
+        input: {
+          type: "object",
+          properties: {
+            file: {
+              type: "string",
+              description:
+                "Path to a previewable file (.md, .drawio, .png, code files); relative, absolute, and ~ paths are supported. Alias of filePath.",
+            },
+            filePath: {
+              type: "string",
+              description:
+                "Alias of file: path to a previewable file (.md, .drawio, .png, code files); relative, absolute, and ~ paths are supported",
+            },
+            worktree: {
+              type: "string",
+              description: "Git worktree name to preview from (resolves via .git/worktrees/)",
+            },
+          },
+          additionalProperties: false,
         },
-        async execute(args, context) {
+        async execute(input: PreviewInput, _toolContext) {
           const { baseUrl } = await ready
-          const file = (args.file ?? args.filePath ?? "").trim()
-          if (args.worktree) {
-            const url = buildPreviewUrl(baseUrl, projectId, file, args.worktree)
-            await openInBrowser($, url)
-            return `Preview URL: ${url}`
+          const file = resolvePreviewInput(input.file, input.filePath)
+          if (!file) {
+            return { content: "Error: preview requires a file or filePath argument." }
+          }
+          if (input.worktree) {
+            const url = buildPreviewUrl(baseUrl, projectId, file, input.worktree)
+            openInBrowser(url)
+            return { content: `Preview URL: ${url}` }
           }
 
-          const absolutePath = resolvePreviewInputPath(file, context.directory)
-          const projectRelativePath = toProjectRelativePath(absolutePath, context.worktree)
+          const absolutePath = resolvePreviewInputPath(file, projectDir)
+          const projectRelativePath = toProjectRelativePath(absolutePath, projectDir)
           let url: string
 
           if (projectRelativePath) {
-            url = buildPreviewUrl(baseUrl, projectId, projectRelativePath, args.worktree)
+            url = buildPreviewUrl(baseUrl, projectId, projectRelativePath)
           } else {
+            // File outside the current project: preview via a one-time token.
+            // V2 has no interactive `context.ask` (V1 permission request), so
+            // the tokenized external-preview mechanism is used directly. The
+            // server only serves files explicitly registered here.
             const fileStat = await stat(absolutePath)
             if (!fileStat.isFile() || !isPreviewable(absolutePath)) {
-              throw new Error("File is not previewable")
+              return { content: "Error: file is not previewable." }
             }
-
-            await context.ask({
-              permission: "opencode-preview.external",
-              patterns: [absolutePath],
-              always: [path.dirname(absolutePath)],
-              metadata: {
-                title: `Preview external file ${absolutePath}`,
-                file: absolutePath,
-              },
-            })
-
             const token = registerExternalPreviewFile(absolutePath, absolutePath)
             url = buildExternalPreviewUrl(baseUrl, token)
           }
-          await openInBrowser($, url)
-          return `Preview URL: ${url}`
-        },
-      }),
-    },
-    "experimental.chat.system.transform": async (_input, output) => {
-      addPreviewSystemPrompt(output)
-    },
-    "tool.definition": async (input, output) => {
-      applyPreviewToolDefinition(input, output)
-    },
-    event: async ({ event }) => {
-      if (event.type !== "file.edited") {
-        return
-      }
-
-      const filePath = String(event.properties?.file ?? "")
-      if (!filePath || !isPreviewable(filePath)) {
-        return
-      }
-
-      await client.app.log({
-        body: {
-          service: "opencode-preview",
-          level: "debug",
-          message: `Edited previewable file: ${filePath}`,
+          openInBrowser(url)
+          return { content: `Preview URL: ${url}` }
         },
       })
-    },
-  }
-}
+    })
 
-/** @deprecated Use `server` instead */
-export const PreviewPlugin = server
+    // Inject the preview usage rule into every session's system context.
+    // V1 used `experimental.chat.system.transform`.
+    const registration = await ctx.session.hook("context", (event) => {
+      event.system.push({ type: "text", text: PREVIEW_SYSTEM_PROMPT })
+    })
 
-export default { id: "opencode-preview", server } satisfies PluginModule
+    // V2's public event stream has no `file.edited` event (V1 debug-only
+    // logging hook dropped). Live reload inside the preview page is handled
+    // by the preview server's own fs watchers over WebSocket — independent
+    // of plugin events.
+
+    return async () => {
+      await registration.dispose()
+    }
+  },
+})

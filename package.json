@@ -1,43 +1,20 @@
 {
   "name": "opencode-preview",
-  "version": "0.12.2",
-  "description": "OpenCode plugin for Markdown and DrawIO preview with live reload",
+  "version": "0.13.0-v2.0.0",
+  "description": "OpenCode plugin for Markdown and DrawIO preview with live reload (self-maintained V2 port)",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./src/index.ts",
   "exports": {
-    ".": "./dist/index.js",
-    "./standalone": "./dist/server.js",
-    "./tui": "./dist/tui.js"
-  },
-  "publishConfig": {
-    "main": "./dist/index.js",
-    "module": "./dist/index.js",
-    "types": "./dist/index.d.ts",
-    "exports": {
-      ".": {
-        "import": "./dist/index.js",
-        "types": "./dist/index.d.ts"
-      },
-      "./standalone": {
-        "import": "./dist/server.js",
-        "types": "./dist/server.d.ts"
-      },
-      "./tui": {
-        "import": "./dist/tui.js",
-        "types": "./dist/tui.d.ts"
-      }
-    }
+    ".": "./src/index.ts",
+    "./standalone": "./src/server.ts"
   },
   "files": [
-    "dist",
+    "src",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "dev": "bun run src/server.ts",
-    "build": "rm -rf dist && tsup",
-    "prepare": "npm run build",
-    "prepublishOnly": "npm run build",
     "test": "bun test"
   },
   "keywords": [
@@ -50,25 +27,20 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Edison-A-N/opencode-preview.git"
+    "url": "git+https://github.com/TurboBinCN/opencode-preview.git"
   },
-  "homepage": "https://github.com/Edison-A-N/opencode-preview#readme",
+  "homepage": "https://github.com/TurboBinCN/opencode-preview#readme",
   "bugs": {
-    "url": "https://github.com/Edison-A-N/opencode-preview/issues"
+    "url": "https://github.com/TurboBinCN/opencode-preview/issues"
   },
   "license": "MIT",
-  "author": "Edison-A-N",
   "dependencies": {
-    "@opencode-ai/plugin": "latest",
     "marked": "^15.0.12",
     "ws": "^8"
   },
   "devDependencies": {
-    "@opentui/core": "^0.1.92",
-    "@opentui/solid": "^0.1.92",
+    "@opencode/plugin": "latest",
     "@types/bun": "latest",
-    "@types/ws": "^8",
-    "baseline-browser-mapping": "^2.10.12",
-    "tsup": "^8.5.1"
+    "@types/ws": "^8"
   }
 }

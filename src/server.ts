@@ -36,6 +36,8 @@ interface ServerState {
   activePort: number
   startPromise: Promise<number> | null
   opencodeServerUrl: string | null
+  /** Project registry populated by plugin instances (V2). projectId -> directory. */
+  registeredProjects: Map<string, string>
   stop: (() => void) | null
 }
 
@@ -56,6 +58,7 @@ function getServerState(): ServerState {
       activePort: 17890,
       startPromise: null,
       opencodeServerUrl: null,
+      registeredProjects: new Map(),
       stop: null,
     }
     g[SINGLETON_KEY] = state
@@ -89,6 +92,16 @@ interface ProjectInfo {
 const projectCache = new Map<string, { dir: string; time: number }>()
 const PROJECT_CACHE_TTL = 60_000
 
+/**
+ * Register a project with the singleton preview server. V2 plugin instances
+ * call this from setup() with their location. Registered projects are served
+ * under `?project=<id>` and listed on the homepage. Registration survives
+ * server restarts until the singleton state is reset.
+ */
+export function registerServerProject(projectId: string, directory: string): void {
+  getServerState().registeredProjects.set(projectId, directory)
+}
+
 function getAuthHeaders(): Record<string, string> {
   const pw = process.env.OPENCODE_SERVER_PASSWORD
   if (!pw) return {}
@@ -97,15 +110,34 @@ function getAuthHeaders(): Record<string, string> {
 }
 
 async function fetchProjects(): Promise<ProjectInfo[]> {
-  const serverUrl = getServerState().opencodeServerUrl
-  if (!serverUrl) return []
-  try {
-    const resp = await fetch(`${serverUrl}/project`, { headers: getAuthHeaders() })
-    if (!resp.ok) return []
-    return (await resp.json()) as ProjectInfo[]
-  } catch {
-    return []
+  const state = getServerState()
+  const projects: ProjectInfo[] = []
+
+  // In-process registry — primary source for V2 plugins (they are
+  // location-scoped and do not receive the opencode server URL like V1).
+  for (const [id, worktree] of state.registeredProjects) {
+    projects.push({ id, worktree })
   }
+
+  // HTTP discovery — fallback for standalone mode (OPENCODE_SERVER_URL).
+  const serverUrl = state.opencodeServerUrl
+  if (serverUrl) {
+    try {
+      const resp = await fetch(`${serverUrl}/project`, { headers: getAuthHeaders() })
+      if (resp.ok) {
+        const remote = (await resp.json()) as ProjectInfo[]
+        for (const p of remote) {
+          if (!projects.some((existing) => existing.id === p.id)) {
+            projects.push(p)
+          }
+        }
+      }
+    } catch {
+      // Ignore discovery failures; registered projects still work.
+    }
+  }
+
+  return projects
 }
 
 async function resolveProjectDir(projectId: string): Promise<string> {
@@ -215,8 +247,9 @@ export function getCodeLanguage(filePath: string): string | null {
 }
 
 export function ensureInsideRoot(rootDir: string, relativeFilePath: string): string {
-  const resolvedPath = path.resolve(rootDir, relativeFilePath)
-  if (resolvedPath !== rootDir && !resolvedPath.startsWith(`${rootDir}${path.sep}`)) {
+  const resolvedRoot = path.resolve(rootDir)
+  const resolvedPath = path.resolve(resolvedRoot, relativeFilePath)
+  if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(`${resolvedRoot}${path.sep}`)) {
     throw new Error("Path is outside of preview root")
   }
   return resolvedPath
@@ -3053,15 +3086,14 @@ export function stopServer(): void {
 
 if (import.meta.main) {
   const directory = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd()
+  registerServerProject("default", directory)
   const port = Number(process.env.PREVIEW_PORT ?? "17890")
   const ocUrl = process.env.OPENCODE_SERVER_URL
   const startedPort = await startServer(port, ocUrl)
   console.log(`Preview server running at http://127.0.0.1:${startedPort}`)
+  console.log(`  Project: ${directory}`)
   if (ocUrl) {
     console.log(`  OpenCode API: ${ocUrl}`)
-    console.log(`  Browse projects: http://127.0.0.1:${startedPort}/`)
-  } else {
-    console.log(`  Project: ${directory}`)
-    console.log(`  Note: Set OPENCODE_SERVER_URL for auto-discovery`)
   }
+  console.log(`  Browse: http://127.0.0.1:${startedPort}/`)
 }

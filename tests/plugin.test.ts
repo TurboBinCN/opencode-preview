@@ -1,21 +1,21 @@
+import path from "node:path"
+
+import path from "node:path"
+
 import { describe, expect, test } from "bun:test"
 
 import {
-  addPreviewSystemPrompt,
-  applyPreviewToolDefinition,
   buildPreviewUrl,
+  PREVIEW_SYSTEM_PROMPT,
   PREVIEW_TOOL_DESCRIPTION,
+  resolvePreviewInput,
   resolvePreviewInputPath,
   toProjectRelativePath,
 } from "../src/index"
 
 describe("preview plugin guidance", () => {
   test("adds a system prompt that requires using the preview tool", () => {
-    const output = { system: ["existing instructions"] }
-
-    addPreviewSystemPrompt(output)
-
-    const prompt = output.system.at(-1)
+    const prompt = PREVIEW_SYSTEM_PROMPT
     expect(prompt).toContain("MUST call the preview tool")
     expect(prompt).toContain("Markdown (.md)")
     expect(prompt).toContain("DrawIO (.drawio)")
@@ -24,21 +24,8 @@ describe("preview plugin guidance", () => {
     expect(prompt).toContain("exact Preview URL")
   })
 
-  test("keeps the enhanced preview tool description for LLM tool definitions", () => {
-    const output = { description: "Preview a file" }
-
-    applyPreviewToolDefinition({ toolID: "preview" }, output)
-
-    expect(output.description).toBe(PREVIEW_TOOL_DESCRIPTION)
-    expect(output.description).toContain("copy the returned Preview URL exactly")
-  })
-
-  test("does not change unrelated tool definitions", () => {
-    const output = { description: "Write a file" }
-
-    applyPreviewToolDefinition({ toolID: "write" }, output)
-
-    expect(output.description).toBe("Write a file")
+  test("exposes an enhanced preview tool description for LLM tool definitions", () => {
+    expect(PREVIEW_TOOL_DESCRIPTION).toContain("copy the returned Preview URL exactly")
   })
 
   test("builds encoded preview URLs", () => {
@@ -63,8 +50,8 @@ describe("preview plugin guidance", () => {
   })
 
   test("resolves preview input relative to tool context directory", () => {
-    expect(resolvePreviewInputPath("docs/readme.md", "/workspace/project")).toBe("/workspace/project/docs/readme.md")
-    expect(resolvePreviewInputPath("/tmp/outside.md", "/workspace/project")).toBe("/tmp/outside.md")
+    expect(resolvePreviewInputPath("docs/readme.md", "/workspace/project")).toBe(path.resolve("/workspace/project", "docs/readme.md"))
+    expect(resolvePreviewInputPath("/tmp/outside.md", "/workspace/project")).toBe(path.resolve("/tmp/outside.md"))
   })
 
   test("converts files inside the worktree to stable project-relative paths", () => {
@@ -73,5 +60,24 @@ describe("preview plugin guidance", () => {
 
   test("returns null for files outside the worktree", () => {
     expect(toProjectRelativePath("/tmp/outside.md", "/workspace/project")).toBeNull()
+  })
+})
+
+describe("resolvePreviewInput (filePath alias)", () => {
+  test("prefers file over filePath", () => {
+    expect(resolvePreviewInput("README.md", "docs/other.md")).toBe("README.md")
+  })
+
+  test("falls back to the filePath alias", () => {
+    expect(resolvePreviewInput(undefined, "docs/guide.md")).toBe("docs/guide.md")
+  })
+
+  test("trims whitespace on both arguments", () => {
+    expect(resolvePreviewInput("  README.md  ")).toBe("README.md")
+    expect(resolvePreviewInput(undefined, "  docs/guide.md  ")).toBe("docs/guide.md")
+  })
+
+  test("returns empty string when neither argument is present", () => {
+    expect(resolvePreviewInput()).toBe("")
   })
 })

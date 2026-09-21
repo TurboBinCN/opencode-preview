@@ -118,6 +118,55 @@ OPENCODE_SERVER_URL=http://localhost:10013 bun run dev
 
 Then open `http://localhost:17890` in your browser.
 
+## V2 Branch (OpenCode V2 / `@opencode/plugin`)
+
+The `v2` branch is a rewrite for **OpenCode V2** (opencode 2.x, plugin SDK
+`@opencode/plugin` — `Plugin.define` instead of the V1 `define` + `plugin`
+namespace). It is not backward compatible with V1.
+
+```bash
+git clone -b v2 git@github.com:TurboBinCN/opencode-preview.git   # or use the ghfast.top proxy
+cd opencode-preview
+bun install
+bun test                              # 44 tests, platform-independent (Windows + POSIX)
+```
+
+Load it in OpenCode V2 config (`opencode.jsonc`):
+
+```jsonc
+{
+  "plugins": [
+    "-opencode.provider.ollama",
+    "E:\\AI-Agents\\opencode-preview"   // local dir — absolute path string
+  ]
+}
+```
+
+### Behavioral differences vs V1 (important)
+
+V2's plugin SDK drops some V1 runtime hooks. Where V1 had them, the v2 branch
+implements equivalent behavior with different mechanisms:
+
+| V1 mechanism | V2 equivalent |
+|---|---|
+| `serverUrl` / `client` on context | **No** server URL / client in V2 → project discovery uses a **process-local registry** (`String() in-process`) seeded from `ctx.location.{directory,project.id}`; standalone mode falls back to HTTP (`OPENCODE_SERVER_URL`) |
+| interactive `ask()` for external file registration | **No** `ask` in V2 → external files are registered non-interactively (registry-only). Behavior is documented, not silent |
+| `$` / worktree / session context (V1 `ToolContext`) | **No** `$`/worktree context → browser opens via `node:child_process` `spawn` (`cmd /c start` / `xdg-open` / `open`); external files registered without interactive prompt |
+| `file.edited` event for live reload | V2 has no public equivalent → live reload handled by the preview server's own fs watcher over WebSocket (independent of plugin events) |
+| `/project` server route | V2 plugin runs inside opencode's own server (no standalone `/project` route) → project resolution limited to **registered projects** (location-scoped), same semantics as V1's worktree-scoped browsing |
+
+### API (v2 branch)
+
+- Entry: `src/index.ts` — `export default Plugin.define({ id, setup(ctx) })`
+- Tool: `ctx.tool.transform(editor => editor.add({ name: "preview", ..., input: JSON Schema, execute }))` → returns `{ content }`
+- System prompt: `ctx.session.hook("context", e => e.system.push({ type: "text", text: PREVIEW_SYSTEM_PROMPT }))`
+- Project registry: `ctx.location.{directory,project.id}` → `registerServerProject(projectId, directory)`
+- Events: `ctx.event.subscribe({ signal })` (AsyncIterable)
+- Browser: `spawn` — no `$` (V1's bun-shell `$` helper removed)
+
+The `schema` parameter name is a **double alias**: `file` (primary) + `filePath`
+(alias — models frequently emit `filePath`). `args.file ?? args.filePath ?? ""`.
+
 ## Configuration
 
 | Environment Variable | Default | Description |

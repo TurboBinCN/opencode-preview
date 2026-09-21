@@ -83,12 +83,12 @@ describe("getCodeLanguage", () => {
 describe("ensureInsideRoot", () => {
   test("allows paths inside root", () => {
     const result = ensureInsideRoot("/project", "src/index.ts")
-    expect(result).toBe("/project/src/index.ts")
+    expect(result).toBe(path.resolve("/project", "src/index.ts"))
   })
 
   test("allows root itself", () => {
     const result = ensureInsideRoot("/project", ".")
-    expect(result).toBe("/project")
+    expect(result).toBe(path.resolve("/project"))
   })
 
   test("rejects path traversal", () => {
