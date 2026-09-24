@@ -21,11 +21,16 @@ const TEMPLATES_DIR = path.join(__dirname, "templates")
 let _stylesCss: string | undefined
 
 async function getStylesCss(): Promise<string> {
-  if (_stylesCss === undefined) {
-    _stylesCss = await readFile(path.join(TEMPLATES_DIR, "styles.css"), "utf-8")
+  const stylesPath = path.join(TEMPLATES_DIR, "styles.css")
+  const mtime = (await stat(stylesPath)).mtimeMs
+  if (_stylesCss === undefined || _stylesCssMtime !== mtime) {
+    _stylesCss = await readFile(stylesPath, "utf-8")
+    _stylesCssMtime = mtime
   }
   return _stylesCss
 }
+
+let _stylesCssMtime = 0
 
 // --- Singleton server state (shared across module instances) ---
 const SINGLETON_KEY = Symbol.for("opencode-preview-server-state")
@@ -109,6 +114,30 @@ function getAuthHeaders(): Record<string, string> {
   return { Authorization: `Basic ${Buffer.from(`${user}:${pw}`).toString("base64")}` }
 }
 
+/**
+ * Derive the opencode server URL when the plugin runs in-process (`opencode
+ * serve --port NNNN`). Falls back to explicit env overrides. Returns null when
+ * no server can be assumed (pure standalone dev server).
+ */
+function deriveOpenCodeServerUrl(): string | null {
+  const fromEnv = process.env.OPENCODE_API_URL ?? process.env.OPENCODE_SERVER_URL
+  if (fromEnv) return fromEnv.replace(/\/$/, "")
+  const argv = process.argv.join(" ")
+  const portMatch = argv.match(/--port[ =](\d+)/)
+  if (portMatch) return `http://127.0.0.1:${portMatch[1]}`
+  return null
+}
+
+interface RemoteProjectResponse {
+  id: string
+  /** V1 field name */
+  worktree?: string
+  /** V2 field name */
+  canonical?: string
+  name?: string
+  icon?: { color?: string }
+}
+
 async function fetchProjects(): Promise<ProjectInfo[]> {
   const state = getServerState()
   const projects: ProjectInfo[] = []
@@ -119,16 +148,30 @@ async function fetchProjects(): Promise<ProjectInfo[]> {
     projects.push({ id, worktree })
   }
 
-  // HTTP discovery — fallback for standalone mode (OPENCODE_SERVER_URL).
-  const serverUrl = state.opencodeServerUrl
+  // HTTP discovery — lists every project known to the opencode server
+  // (not only those with a live plugin instance), matching the homepage
+  // of the opencode web UI.
+  const serverUrl = state.opencodeServerUrl ?? deriveOpenCodeServerUrl()
   if (serverUrl) {
+    state.opencodeServerUrl = serverUrl
     try {
-      const resp = await fetch(`${serverUrl}/project`, { headers: getAuthHeaders() })
-      if (resp.ok) {
-        const remote = (await resp.json()) as ProjectInfo[]
+      let remote: RemoteProjectResponse[] | null = null
+      // V2 merges the JSON API under /api/; V1 exposed /project directly.
+      for (const endpoint of ["/api/project", "/project"]) {
+        const resp = await fetch(`${serverUrl}${endpoint}`, { headers: getAuthHeaders() })
+        if (resp.ok) {
+          const ct = resp.headers.get("content-type") ?? ""
+          if (!ct.includes("application/json")) continue
+          remote = (await resp.json()) as RemoteProjectResponse[]
+          break
+        }
+      }
+      if (remote) {
         for (const p of remote) {
+          const worktree = p.worktree ?? p.canonical
+          if (!worktree) continue
           if (!projects.some((existing) => existing.id === p.id)) {
-            projects.push(p)
+            projects.push({ id: p.id, worktree, name: p.name, icon: p.icon })
           }
         }
       }
@@ -1200,7 +1243,85 @@ function shellScript(projectId: string, worktreeParams: string, rootDir: string,
         e.stopPropagation();
         closeTab(i);
       });
+
+      btn.addEventListener("contextmenu", function(e) {
+        showContextMenu(e, i);
+      });
     });
+  }
+
+  // --- Tab context menu ---
+  var contextMenu = null;
+  var contextMenuTabIndex = -1;
+
+  function createContextMenu() {
+    if (contextMenu) return contextMenu;
+    var menu = document.createElement("div");
+    menu.className = "tab-context-menu";
+    menu.innerHTML = '<button class="tab-context-menu-item" data-action="close-other">Close Other Tabs</button><button class="tab-context-menu-item" data-action="close-all">Close All Tabs</button>';
+    document.body.appendChild(menu);
+    menu.addEventListener("click", function(e) {
+      var item = e.target.closest(".tab-context-menu-item");
+      if (!item) return;
+      var action = item.getAttribute("data-action");
+      if (action === "close-other") closeOtherTabs();
+      else if (action === "close-all") closeAllTabs();
+      hideContextMenu();
+    });
+    document.addEventListener("click", hideContextMenu);
+    document.addEventListener("contextmenu", function(e) {
+      if (!e.target.closest(".tab-item")) hideContextMenu();
+    });
+    contextMenu = menu;
+    return menu;
+  }
+
+  function showContextMenu(e, tabIndex) {
+    e.preventDefault();
+    var menu = createContextMenu();
+    contextMenuTabIndex = tabIndex;
+    var closeOtherBtn = menu.querySelector('[data-action="close-other"]');
+    var closeAllBtn = menu.querySelector('[data-action="close-all"]');
+    closeOtherBtn.disabled = tabs.length <= 1;
+    closeAllBtn.disabled = tabs.length === 0;
+    menu.style.left = e.clientX + "px";
+    menu.style.top = e.clientY + "px";
+    menu.classList.add("show");
+  }
+
+  function hideContextMenu() {
+    if (contextMenu) {
+      contextMenu.classList.remove("show");
+      contextMenuTabIndex = -1;
+    }
+  }
+
+  function closeOtherTabs() {
+    if (contextMenuTabIndex < 0 || contextMenuTabIndex >= tabs.length) return;
+    var keepTab = tabs[contextMenuTabIndex];
+    var wasActive = activeTabIndex === contextMenuTabIndex;
+    var newActiveIndex = 0;
+    tabs = [keepTab];
+    activeTabIndex = 0;
+    if (!wasActive) {
+      switchToTab(0);
+    } else {
+      renderTabBar();
+      syncTabUrl();
+      saveTabState();
+    }
+  }
+
+  function closeAllTabs() {
+    tabs = [];
+    activeTabIndex = -1;
+    content.className = "preview-content";
+    content.innerHTML = '<div class="browse-empty"><p>Select a file from the sidebar to preview</p></div>';
+    document.title = "Preview";
+    updateSidebarActive("", "file");
+    renderTabBar();
+    syncTabUrl();
+    saveTabState();
   }
 
   function switchToTab(index) {

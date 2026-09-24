@@ -821,6 +821,63 @@ button:hover {
   color: var(--text);
 }
 
+/* Tab context menu */
+.tab-context-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  min-width: 160px;
+  padding: 0.4rem 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15), 0 2px 6px rgba(0, 0, 0, 0.1);
+  display: none;
+  flex-direction: column;
+  font-size: 0.8rem;
+}
+
+.tab-context-menu.show {
+  display: flex;
+}
+
+.tab-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.4rem 0.75rem;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: inherit;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+
+.tab-context-menu-item:hover {
+  background: var(--list-hover);
+}
+
+.tab-context-menu-item:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.tab-context-menu-item:disabled:hover {
+  background: transparent;
+}
+
+.tab-context-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.3rem 0;
+}
+
 .preview-content {
   flex: 1;
   overflow-y: auto;
@@ -991,7 +1048,6 @@ button:hover {
 .fm-val { color: var(--fg); }
 
 .markdown-body {
-  max-width: 860px;
   margin: 0 auto;
   padding: 2rem 1rem 3rem;
   line-height: 1.7;

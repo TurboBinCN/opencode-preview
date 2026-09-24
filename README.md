@@ -32,7 +32,7 @@ That's it. Open OpenCode, and preview is ready.
 
 | Format | Description |
 |---|---|
-| **Markdown** | GFM rendering via [marked](https://github.com/markedjs/marked), syntax-highlighted code blocks, word count, reading time estimate, auto-generated Table of Contents |
+| **Markdown** | GFM rendering via [marked](https://github.com/markedjs/marked), syntax-highlighted code blocks, word count, reading time estimate, auto-generated Table of Contents. Content renders at full available width (no max-width cap), so wide tables are not squeezed |
 | **DrawIO** | Embedded [draw.io](https://www.drawio.com/) viewer with multi-page support, zoom, layers, and page navigation |
 | **HTML** | Sandboxed iframe preview with "Open in new tab" link |
 | **CSV** | Tabular rendering with rainbow-striped rows, row/column stats |
@@ -44,7 +44,8 @@ That's it. Open OpenCode, and preview is ready.
 | Feature | Description |
 |---|---|
 | **SPA Navigation** | Single-page app with client-side routing — no full reloads between files |
-| **Tabbed Interface** | Open multiple files in tabs, switch between them, close individually. Tab state persists across reloads via localStorage |
+| **Tabbed Interface** | Open multiple files in tabs (limit configurable via `PREVIEW_MAX_TABS`), switch between them, close individually. Tab state persists across reloads via localStorage |
+| **Tab Context Menu** | Right-click a tab → **Close Other Tabs** / **Close All Tabs** (items auto-disable when not applicable) |
 | **File Tree Sidebar** | Collapsible folder tree with file-type icons, remembers open/closed folder state |
 | **Resizable Sidebar** | Drag-to-resize sidebar width, persisted across sessions |
 | **Markdown TOC** | Auto-generated "On This Page" table of contents with scroll-tracking active headings |
@@ -149,11 +150,11 @@ implements equivalent behavior with different mechanisms:
 
 | V1 mechanism | V2 equivalent |
 |---|---|
-| `serverUrl` / `client` on context | **No** server URL / client in V2 → project discovery uses a **process-local registry** (`String() in-process`) seeded from `ctx.location.{directory,project.id}`; standalone mode falls back to HTTP (`OPENCODE_SERVER_URL`) |
+| `serverUrl` / `client` on context | **No** server URL / client in V2 → project discovery uses a **process-local registry** seeded from `ctx.location.{directory,project.id}`; when running in-process (`opencode serve --port NNNN`) the plugin also **derives the server URL from `process.argv`** and discovers *all* known projects over HTTP. Standalone mode uses `OPENCODE_SERVER_URL` / `OPENCODE_API_URL` |
 | interactive `ask()` for external file registration | **No** `ask` in V2 → external files are registered non-interactively (registry-only). Behavior is documented, not silent |
 | `$` / worktree / session context (V1 `ToolContext`) | **No** `$`/worktree context → browser opens via `node:child_process` `spawn` (`cmd /c start` / `xdg-open` / `open`); external files registered without interactive prompt |
 | `file.edited` event for live reload | V2 has no public equivalent → live reload handled by the preview server's own fs watcher over WebSocket (independent of plugin events) |
-| `/project` server route | V2 plugin runs inside opencode's own server (no standalone `/project` route) → project resolution limited to **registered projects** (location-scoped), same semantics as V1's worktree-scoped browsing |
+| `/project` server route | V2 exposes the JSON API under **`/api/project`** (V1's `/project` still tried as a fallback); discovery responses accept both `canonical` (V2) and `worktree` (V1) field names. Registry entries take precedence over HTTP-discovered ones |
 
 ### API (v2 branch)
 
@@ -167,6 +168,13 @@ implements equivalent behavior with different mechanisms:
 The `schema` parameter name is a **double alias**: `file` (primary) + `filePath`
 (alias — models frequently emit `filePath`). `args.file ?? args.filePath ?? ""`.
 
+### Development tips (v2)
+
+- **No build step**: Bun executes the `.ts` sources directly (transpiler built into the runtime). `bun test` is the compile+test gate — no `tsc`/`dist` needed.
+- **`styles.css` is mtime-cached**: edits to `src/templates/styles.css` take effect on page refresh (no process restart).
+- Changes to `src/index.ts` (plugin setup, tool registration, system prompt) require restarting the OpenCode process; changes under `src/server.ts` require re-loading the plugin module (e.g. restart OpenCode).
+- When OpenCode's HTTP API requires auth, the preview server uses `OPENCODE_SERVER_PASSWORD` (and `OPENCODE_SERVER_USERNAME`, default `opencode`) as Basic auth for project discovery.
+
 ## Configuration
 
 | Environment Variable | Default | Description |
@@ -174,7 +182,8 @@ The `schema` parameter name is a **double alias**: `file` (primary) + `filePath`
 | `PREVIEW_PORT` | `17890` | Server port |
 | `PREVIEW_HOST` | `localhost` | Hostname used in generated preview URLs. Set to your remote machine's hostname or IP when accessing the preview from a different machine (e.g. SSH remote) |
 | `PREVIEW_MAX_TABS` | `10` | Maximum number of open tabs in the browser UI |
-| `OPENCODE_SERVER_URL` | — | OpenCode server URL for project discovery (standalone mode only; auto-configured when running as plugin) |
+| `OPENCODE_SERVER_URL` | — | OpenCode server URL for project discovery (standalone mode; auto-derived from `process.argv` when running in-process as plugin). Alias: `OPENCODE_API_URL` |
+| `OPENCODE_SERVER_PASSWORD` | — | Basic auth password for OpenCode HTTP API discovery (username via `OPENCODE_SERVER_USERNAME`, default `opencode`) |
 
 ## Architecture
 
